@@ -86,15 +86,16 @@
     const ruleCol = tf.fill([batch, 1], c.rule), nCol = tf.fill([batch, 1], (c.n - 2) / 18);
     const fakeX = tf.concat([fakePair, ruleCol, nCol], 1);
     const fakeY = tf.zeros([batch, 1]);
-    const dl1 = scalar(await discriminator.trainOnBatch(realX, realY));
-    const dl2 = scalar(await discriminator.trainOnBatch(fakeX, fakeY));
+    const dInput = tf.concat([realX, fakeX], 0);
+    const dTargets = tf.concat([realY, fakeY], 0);
+    const dl = scalar(await discriminator.trainOnBatch(dInput, dTargets));
     const noiseInput = tf.slice(gIn, [0, 0], [-1, 1]);
     const conditionInput = tf.slice(gIn, [0, 1], [-1, 2]);
     const gTargets = tf.ones([batch, 1]);
     const gl = scalar(await combined.trainOnBatch([noiseInput, conditionInput], gTargets));
-    [realX, realY, gIn, fakePair, ruleCol, nCol, fakeX, fakeY, noiseInput, conditionInput, gTargets].forEach((t) => t.dispose());
+    [realX, realY, gIn, fakePair, ruleCol, nCol, fakeX, fakeY, dInput, dTargets, noiseInput, conditionInput, gTargets].forEach((t) => t.dispose());
     trainingNow = false;
-    epoch += 1; lossesD.push((dl1 + dl2) / 2); lossesG.push(gl);
+    epoch += 1; lossesD.push(dl); lossesG.push(gl);
     if (lossesD.length > 220) { lossesD.shift(); lossesG.shift(); }
     return true;
   }
