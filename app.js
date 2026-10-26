@@ -1,6 +1,6 @@
 (() => {
   const $ = (id) => document.getElementById(id);
-  const palette = { coral: '#ed806b', mint: '#36a88b', grid: '#edf0ee', text: '#8d989d', ink: '#68757b' };
+  const palette = { coral: '#16976d', mint: '#a767b5', grid: '#edf0ee', text: '#8d989d', ink: '#68757b' };
   const els = {
     bidders: $('bidders'), biddersValue: $('biddersValue'), noise: $('noise'), noiseValue: $('noiseValue'), market: $('market'),
     ruleNote: $('ruleNote'), epoch: $('epochCount'), state: $('trainingState'), progress: $('progressBar'), dLoss: $('dLoss'), gLoss: $('gLoss'), quality: $('quality'),
@@ -30,7 +30,7 @@
     if (!window.tf) return false;
     disposeModels();
     const tf = window.tf;
-    const gi = tf.input({ shape: [3] });
+    const gi = tf.input({ shape: [10] });
     let gx = tf.layers.dense({ units: 32, activation: 'relu', kernelInitializer: 'glorotUniform' }).apply(gi);
     gx = tf.layers.dense({ units: 32, activation: 'relu' }).apply(gx);
     const go = tf.layers.dense({ units: 2, activation: 'sigmoid' }).apply(gx);
@@ -43,7 +43,7 @@
     discriminator = tf.model({ inputs: di, outputs: dout });
     discriminator.compile({ optimizer: tf.train.adam(.0007, .5), loss: 'binaryCrossentropy' });
     discriminator.trainable = false;
-    const noiseInput = tf.input({ shape: [1] });
+    const noiseInput = tf.input({ shape: [8] });
     const conditionInput = tf.input({ shape: [2] });
     const ci = tf.layers.concatenate().apply([noiseInput, conditionInput]);
     const fake = generator.apply(ci);
@@ -57,7 +57,7 @@
   function disposeModels() { [generator, discriminator, combined].forEach((m) => { if (m) m.dispose(); }); generator = discriminator = combined = null; }
   function genConditions(count, noise = true) {
     const c = condition();
-    return Array.from({ length: count }, () => [noise ? Math.random() * 2 - 1 : 0, c.rule, (c.n - 2) / 18]);
+    return Array.from({ length: count }, () => [...Array.from({ length: 8 }, () => noise ? Math.random() * 2 - 1 : 0), c.rule, (c.n - 2) / 18]);
   }
   function packDiscriminator(samples) {
     const c = condition();
@@ -89,8 +89,8 @@
     const dInput = tf.concat([realX, fakeX], 0);
     const dTargets = tf.concat([realY, fakeY], 0);
     const dl = scalar(await discriminator.trainOnBatch(dInput, dTargets));
-    const noiseInput = tf.slice(gIn, [0, 0], [-1, 1]);
-    const conditionInput = tf.slice(gIn, [0, 1], [-1, 2]);
+    const noiseInput = tf.slice(gIn, [0, 0], [-1, 8]);
+    const conditionInput = tf.slice(gIn, [0, 8], [-1, 2]);
     const gTargets = tf.ones([batch, 1]);
     const gl = scalar(await combined.trainOnBatch([noiseInput, conditionInput], gTargets));
     [realX, realY, gIn, fakePair, ruleCol, nCol, fakeX, fakeY, dInput, dTargets, noiseInput, conditionInput, gTargets].forEach((t) => t.dispose());
@@ -113,9 +113,9 @@
     ctx.clearRect(0, 0, w, h); ctx.font = '8px "DM Mono", monospace'; ctx.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
       const y = p.t + ch * i / 4; ctx.strokeStyle = palette.grid; ctx.beginPath(); ctx.moveTo(p.l, y); ctx.lineTo(w - p.r, y); ctx.stroke();
-      ctx.fillStyle = palette.text; ctx.textAlign = 'right'; ctx.fillText((maxY * (1 - i / 4)).toFixed(maxY <= 1 ? 1 : 0), p.l - 6, y + 3);
+      ctx.fillStyle = palette.text; ctx.textAlign = 'right'; ctx.fillText((maxY * (1 - i / 4)).toFixed(maxY <= 10 ? 1 : 0), p.l - 6, y + 3);
       const x = p.l + cw * i / 4; ctx.strokeStyle = palette.grid; ctx.beginPath(); ctx.moveTo(x, p.t); ctx.lineTo(x, p.t + ch); ctx.stroke();
-      ctx.textAlign = 'center'; ctx.fillStyle = palette.text; ctx.fillText((maxX * i / 4).toFixed(maxX <= 1 ? 1 : 0), x, h - 13);
+      ctx.textAlign = 'center'; ctx.fillStyle = palette.text; ctx.fillText((maxX * i / 4).toFixed(maxX <= 10 ? 1 : 0), x, h - 13);
     }
     ctx.fillStyle = palette.ink; ctx.font = '8px "Noto Sans SC", sans-serif'; ctx.textAlign = 'center'; ctx.fillText(xLabel, p.l + cw / 2, h - 1);
     ctx.save(); ctx.translate(9, p.t + ch / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(yLabel, 0, 0); ctx.restore();
@@ -173,7 +173,7 @@
     [els.bidders, els.noise].forEach((input) => { const pct = (Number(input.value) - Number(input.min)) / (Number(input.max) - Number(input.min)) * 100; input.style.background = `linear-gradient(90deg,${palette.coral} ${pct}%,#e8e9e8 ${pct}%)`; });
   }
   function reset() {
-    running = false; els.train.disabled = false; els.train.innerHTML = '<span class="play-icon">▶</span> 开始训练';
+    running = false; els.train.disabled = false; els.train.innerHTML = '<span class="play-icon">▶</span>'; els.train.title = '开始训练';
     epoch = 0; lossesD = []; lossesG = []; els.epoch.textContent = '0000'; els.dLoss.textContent = '—'; els.gLoss.textContent = '—'; els.state.textContent = '等待开始'; els.progress.style.width = '0%';
     real = sampleMarket(256); generated = getGenerated(256); $('sampleCount').textContent = '256';
     render();
@@ -189,9 +189,9 @@
         els.epoch.textContent = String(epoch).padStart(4, '0'); els.dLoss.textContent = lossesD.at(-1).toFixed(3); els.gLoss.textContent = lossesG.at(-1).toFixed(3); els.progress.style.width = `${Math.min(100, epoch / 2)}%`;
         if (epoch % 4 === 0) { generated = getGenerated(256); render(); }
         setTimeout(loop, 35);
-      } catch (err) { running = false; els.train.disabled = false; els.state.textContent = '训练遇到问题'; console.error(err); showToast('训练暂时中断，请重新生成市场后再试'); }
+      } catch (err) { running = false; els.train.disabled = false; els.train.title = '开始训练'; els.state.textContent = '训练遇到问题'; console.error(err); showToast('训练暂时中断，请重新生成市场后再试'); }
     };
-    els.train.innerHTML = '<span class="play-icon">◌</span> 正在训练'; loop();
+    els.train.title = '训练进行中'; loop();
   }
   async function singleStep() {
     if (!generator || trainingNow) { showToast('模型正在准备，请稍候'); return; }
@@ -209,9 +209,10 @@
   }));
   [els.bidders, els.noise, els.market].forEach((input) => input.addEventListener('input', scheduleReset));
   $('resetData').addEventListener('click', () => { scheduleReset(); });
+  $('resetParameters').addEventListener('click', scheduleReset);
   els.train.addEventListener('click', startLoop);
   els.step.addEventListener('click', singleStep);
-  els.stop.addEventListener('click', () => { running = false; els.train.disabled = false; els.train.innerHTML = '<span class="play-icon">▶</span> 继续训练'; els.state.textContent = '训练已暂停'; });
+  els.stop.addEventListener('click', () => { running = false; els.train.disabled = false; els.train.title = '继续训练'; els.state.textContent = '训练已暂停'; });
   window.addEventListener('resize', () => requestAnimationFrame(render));
 
   async function boot() {
