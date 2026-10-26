@@ -1,14 +1,14 @@
 (() => {
   const $ = (id) => document.getElementById(id);
-  const palette = { coral: '#16976d', mint: '#a767b5', grid: '#edf0ee', text: '#8d989d', ink: '#68757b' };
+  const palette = { coral: '#16976d', mint: '#a767b5', discriminator: '#6799c5', grid: '#edf0ee', text: '#8d989d', ink: '#68757b' };
   const els = {
     bidders: $('bidders'), biddersValue: $('biddersValue'), noise: $('noise'), noiseValue: $('noiseValue'), market: $('market'),
     ruleNote: $('ruleNote'), epoch: $('epochCount'), state: $('trainingState'), progress: $('progressBar'), dLoss: $('dLoss'), gLoss: $('gLoss'), quality: $('quality'),
     train: $('trainButton'), step: $('stepButton'), stop: $('stopButton'), toast: $('toast')
   };
-  let rule = 'first', generator, discriminator, combined, real = [], generated = [], lossesD = [], lossesG = [], epoch = 0;
+  let rule = 'first', generator, discriminator, combined, discriminatorOptimizer, generatorOptimizer, real = [], generated = [], lossesD = [], lossesG = [], epoch = 0;
   let running = false, trainingNow = false, toastTimer, refreshTimer, loopId = 0;
-  let decisionSurface = null;
+  let decisionSurface = null, generatorManifold = null;
 
   function gaussian() { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
   function valuation() {
@@ -42,7 +42,8 @@
     dx = tf.layers.dense({ units: 32, activation: 'relu' }).apply(dx);
     const dout = tf.layers.dense({ units: 1, activation: 'sigmoid' }).apply(dx);
     discriminator = tf.model({ inputs: di, outputs: dout });
-    discriminator.compile({ optimizer: tf.train.adam(.0007, .5), loss: 'binaryCrossentropy' });
+    discriminatorOptimizer = tf.train.adam(.0007, .5);
+    discriminator.compile({ optimizer: discriminatorOptimizer, loss: 'binaryCrossentropy' });
     discriminator.trainable = false;
     const noiseInput = tf.input({ shape: [8] });
     const conditionInput = tf.input({ shape: [2] });
@@ -51,11 +52,21 @@
     const joined = tf.layers.concatenate().apply([fake, conditionInput]);
     const validity = discriminator.apply(joined);
     combined = tf.model({ inputs: [noiseInput, conditionInput], outputs: validity });
-    combined.compile({ optimizer: tf.train.adam(.0007, .5), loss: 'binaryCrossentropy' });
+    generatorOptimizer = tf.train.adam(.0007, .5);
+    combined.compile({ optimizer: generatorOptimizer, loss: 'binaryCrossentropy' });
     discriminator.trainable = true;
     return true;
   }
-  function disposeModels() { [generator, discriminator, combined].forEach((m) => { if (m) m.dispose(); }); generator = discriminator = combined = null; }
+  function disposeModels() {
+    // The combined model shares both networks' layers. Disposing all three
+    // containers separately disposes shared Layers more than once in tfjs.
+    if (combined) combined.dispose();
+    else { if (generator) generator.dispose(); if (discriminator) discriminator.dispose(); }
+    if (discriminatorOptimizer) discriminatorOptimizer.dispose();
+    if (generatorOptimizer) generatorOptimizer.dispose();
+    generator = discriminator = combined = null;
+    discriminatorOptimizer = generatorOptimizer = null;
+  }
   function genConditions(count, noise = true) {
     const c = condition();
     return Array.from({ length: count }, () => [...Array.from({ length: 8 }, () => noise ? Math.random() * 2 - 1 : 0), c.rule, (c.n - 2) / 18]);
@@ -156,6 +167,28 @@
     try { output = discriminator.predict(batch); decisionSurface = { size, values: Array.from(output.dataSync()) }; }
     finally { batch.dispose(); if (output) output.dispose(); }
   }
+  function refreshGeneratorManifold() {
+    if (!generator) return;
+    const tf = window.tf, size = 9, c = condition(), inputs = [];
+    for (let row = 0; row < size; row++) for (let col = 0; col < size; col++) {
+      const z = Array(8).fill(0); z[0] = (col / (size - 1)) * 2 - 1; z[1] = (row / (size - 1)) * 2 - 1;
+      inputs.push([...z, c.rule, (c.n - 2) / 18]);
+    }
+    const batch = tf.tensor2d(inputs); let output;
+    try {
+      output = generator.predict(batch); const data = output.dataSync();
+      generatorManifold = Array.from({length:size*size}, (_,i) => ({value:data[i*2], bid:data[i*2]*data[i*2+1]*1.05}));
+    } finally { batch.dispose(); if (output) output.dispose(); }
+  }
+  function drawGeneratorManifold() {
+    const plot = fitCanvas($('generatorPreview')); if (!plot || !generatorManifold) return;
+    const {ctx,w,h} = plot, size = 9, point = (row,col) => generatorManifold[row*size+col];
+    ctx.clearRect(0,0,w,h); ctx.strokeStyle='rgba(154,105,171,.62)'; ctx.lineWidth=.8;
+    for (let i=0;i<size;i++) {
+      ctx.beginPath(); for(let j=0;j<size;j++){const p=point(i,j),x=3+p.value*(w-6),y=h-3-p.bid*(h-6); if(!j)ctx.moveTo(x,y);else ctx.lineTo(x,y);} ctx.stroke();
+      ctx.beginPath(); for(let j=0;j<size;j++){const p=point(j,i),x=3+p.value*(w-6),y=h-3-p.bid*(h-6); if(!j)ctx.moveTo(x,y);else ctx.lineTo(x,y);} ctx.stroke();
+    }
+  }
   function histogram(arr, bins = 12) { const counts = new Array(bins).fill(0); arr.forEach((s) => { const i = clamp(Math.floor(s.ratio / 1.2 * bins), 0, bins - 1); counts[i]++; }); return counts.map((x) => x / Math.max(1, arr.length)); }
   function drawDensity() {
     const plot = fitCanvas($('densityChart')); if (!plot) return;
@@ -170,7 +203,25 @@
     const { ctx, w, h } = plot, max = Math.max(2, ...lossesD, ...lossesG) * 1.08;
     const { p, cw, ch } = axes(ctx, w, h, '训练迭代', '损失值', Math.max(100, epoch), max);
     const line = (values, color) => { if (values.length < 2) return; ctx.strokeStyle = color; ctx.lineWidth = 1.7; ctx.lineJoin = 'round'; ctx.beginPath(); const start = Math.max(0, epoch - values.length); values.forEach((v, i) => { const x = p.l + (start + i) / Math.max(100, epoch) * cw, y = p.t + ch - v / max * ch; if (!i) ctx.moveTo(x, y); else ctx.lineTo(x, y); }); ctx.stroke(); };
-    line(lossesD, palette.coral); line(lossesG, palette.mint);
+    line(lossesD, palette.discriminator); line(lossesG, palette.mint);
+  }
+  function drawModelPreviews() {
+    const drawSamples = (id, samples, color) => {
+      const plot = fitCanvas($(id)); if (!plot) return;
+      const { ctx, w, h } = plot; ctx.clearRect(0, 0, w, h); ctx.fillStyle = color;
+      samples.forEach((s) => { ctx.globalAlpha = .7; ctx.beginPath(); ctx.arc(4 + clamp(s.value, 0, 1) * (w - 8), h - 4 - clamp(s.bid, 0, 1) * (h - 8), 1.4, 0, Math.PI * 2); ctx.fill(); }); ctx.globalAlpha = 1;
+    };
+    drawSamples('generatedPreview', generated, palette.mint);
+    drawGeneratorManifold();
+    const plot = fitCanvas($('discriminatorPreview'));
+    if (plot && decisionSurface) {
+      const { ctx, w, h } = plot; ctx.clearRect(0, 0, w, h);
+      decisionSurface.values.forEach((score, i) => {
+        const color = score >= .5 ? '22,151,109' : '167,103,181';
+        ctx.fillStyle = `rgba(${color},${Math.abs(score - .5) * .8})`;
+        ctx.fillRect((i % decisionSurface.size) * w / decisionSurface.size, Math.floor(i / decisionSurface.size) * h / decisionSurface.size, w / decisionSurface.size + .3, h / decisionSurface.size + .3);
+      });
+    }
   }
   function evaluate(arr) {
     const n = condition().n, groups = Math.floor(arr.length / n); let revenue = 0, efficient = 0, count = 0;
@@ -193,7 +244,7 @@
     else if (gap < .18) { quality.textContent = '分布接近'; insight.textContent = '生成样本的折扣率分布已接近模拟市场。成交价和配置效率仍会受抽样波动影响。'; }
     else { quality.textContent = '持续拟合'; insight.textContent = '生成样本仍与市场分布存在差异。试着增加迭代，或调整竞买人数与报价噪声。'; }
   }
-  function render() { drawScatter(); drawDensity(); drawLoss(); updateMetrics(); }
+  function render() { drawScatter(); drawDensity(); drawLoss(); drawModelPreviews(); updateMetrics(); }
   function showToast(message) { els.toast.textContent = message; els.toast.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(() => els.toast.classList.remove('visible'), 2400); }
   function setRuleNote() { els.ruleNote.textContent = rule === 'first' ? '第一价格拍卖下，竞买者需要在提高中标概率与压低支付价格之间权衡。' : '第二价格拍卖下，诚实报价是私人价值模型中的基准策略。'; }
   function updateSliders() {
@@ -202,10 +253,10 @@
     [els.bidders, els.noise].forEach((input) => { const pct = (Number(input.value) - Number(input.min)) / (Number(input.max) - Number(input.min)) * 100; input.style.background = `linear-gradient(90deg,${palette.coral} ${pct}%,#e8e9e8 ${pct}%)`; });
   }
   function reset() {
-    running = false; els.train.disabled = false; els.train.innerHTML = '<span class="play-icon">▶</span>'; els.train.title = '开始训练';
-    epoch = 0; lossesD = []; lossesG = []; decisionSurface = null; $('trainingError').hidden = true; els.epoch.textContent = '0000'; els.dLoss.textContent = '—'; els.gLoss.textContent = '—'; els.state.textContent = '等待开始'; els.progress.style.width = '0%';
+    running = false; els.train.disabled = false; els.train.innerHTML = '<span class="play-icon">▶</span><span class="run-label">训练</span>'; els.train.title = '开始训练';
+    epoch = 0; lossesD = []; lossesG = []; decisionSurface = null; generatorManifold = null; $('trainingError').hidden = true; els.epoch.textContent = '0000'; els.dLoss.textContent = '—'; els.gLoss.textContent = '—'; els.state.textContent = '等待开始'; els.progress.style.width = '0%';
     real = sampleMarket(256); generated = getGenerated(256); $('sampleCount').textContent = '256';
-    if (discriminator) refreshDecisionSurface();
+    if (discriminator) { refreshDecisionSurface(); refreshGeneratorManifold(); }
     render();
   }
   async function startLoop() {
@@ -219,7 +270,7 @@
         if (!ok) { setTimeout(loop, 80); return; }
         els.epoch.textContent = String(epoch).padStart(4, '0'); els.dLoss.textContent = lossesD.at(-1).toFixed(3); els.gLoss.textContent = lossesG.at(-1).toFixed(3); els.progress.style.width = `${Math.min(100, epoch / 2)}%`;
         if (epoch % 4 === 0) { generated = getGenerated(256); }
-        if (epoch % 8 === 0 || !decisionSurface) refreshDecisionSurface();
+        if (epoch % 8 === 0 || !decisionSurface) { refreshDecisionSurface(); refreshGeneratorManifold(); }
         if (epoch % 4 === 0) render();
         setTimeout(loop, 35);
       } catch (err) { reportTrainingError(err); }
@@ -232,7 +283,7 @@
     els.state.textContent = '单步训练中';
     try {
       await trainOne(); els.epoch.textContent = String(epoch).padStart(4, '0'); els.dLoss.textContent = lossesD.at(-1).toFixed(3); els.gLoss.textContent = lossesG.at(-1).toFixed(3); els.progress.style.width = `${Math.min(100, epoch / 2)}%`;
-      generated = getGenerated(256); render(); els.state.textContent = '单步完成';
+      generated = getGenerated(256); refreshDecisionSurface(); refreshGeneratorManifold(); render(); els.state.textContent = '单步完成';
     } catch (err) { reportTrainingError(err); }
   }
   function reportTrainingError(err) {
@@ -258,7 +309,7 @@
   async function boot() {
     updateSliders(); setRuleNote(); real = sampleMarket(256);
     if (!window.tf) { generated = sampleMarket(256); render(); els.state.textContent = '可视化预览'; showToast('模型库加载失败；图表仍可用于查看模拟数据'); return; }
-    try { await window.tf.ready(); initModel(); generated = getGenerated(256); refreshDecisionSurface(); render(); els.state.textContent = '模型就绪'; }
+    try { await window.tf.ready(); initModel(); generated = getGenerated(256); refreshDecisionSurface(); refreshGeneratorManifold(); render(); els.state.textContent = '模型就绪'; }
     catch (err) { console.error(err); generated = sampleMarket(256); render(); els.state.textContent = '可视化预览'; showToast('模型初始化失败；请检查网络后刷新页面'); }
   }
   boot();
