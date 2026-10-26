@@ -7,7 +7,8 @@
     train: $('trainButton'), step: $('stepButton'), stop: $('stopButton'), toast: $('toast')
   };
   let rule = 'first', generator, discriminator, combined, real = [], generated = [], lossesD = [], lossesG = [], epoch = 0;
-  let running = false, trainingNow = false, toastTimer, refreshTimer;
+  let running = false, trainingNow = false, toastTimer, refreshTimer, loopId = 0;
+  let decisionSurface = null;
 
   function gaussian() { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
   function valuation() {
@@ -21,7 +22,7 @@
     const c = condition();
     return Array.from({ length: count }, () => {
       const value = valuation();
-      const ideal = c.rule ? .985 : (c.n - 1) / c.n;
+      const ideal = c.rule ? 1 : (c.n - 1) / c.n;
       const ratio = clamp(ideal + gaussian() * c.noise * (c.rule ? .2 : .36), .04, 1.04);
       return { value, ratio, bid: value * ratio };
     });
@@ -77,27 +78,32 @@
   async function trainOne() {
     if (!generator || trainingNow) return false;
     trainingNow = true;
-    const tf = window.tf, batch = 64, c = condition();
-    const freshReal = sampleMarket(batch);
-    const realX = tf.tensor2d(packDiscriminator(freshReal));
-    const realY = tf.ones([batch, 1]);
-    const gIn = tf.tensor2d(genConditions(batch));
-    const fakePair = generator.predict(gIn);
-    const ruleCol = tf.fill([batch, 1], c.rule), nCol = tf.fill([batch, 1], (c.n - 2) / 18);
-    const fakeX = tf.concat([fakePair, ruleCol, nCol], 1);
-    const fakeY = tf.zeros([batch, 1]);
-    const dInput = tf.concat([realX, fakeX], 0);
-    const dTargets = tf.concat([realY, fakeY], 0);
-    const dl = scalar(await discriminator.trainOnBatch(dInput, dTargets));
-    const noiseInput = tf.slice(gIn, [0, 0], [-1, 8]);
-    const conditionInput = tf.slice(gIn, [0, 8], [-1, 2]);
-    const gTargets = tf.ones([batch, 1]);
-    const gl = scalar(await combined.trainOnBatch([noiseInput, conditionInput], gTargets));
-    [realX, realY, gIn, fakePair, ruleCol, nCol, fakeX, fakeY, dInput, dTargets, noiseInput, conditionInput, gTargets].forEach((t) => t.dispose());
-    trainingNow = false;
-    epoch += 1; lossesD.push(dl); lossesG.push(gl);
-    if (lossesD.length > 220) { lossesD.shift(); lossesG.shift(); }
-    return true;
+    const tf = window.tf, batch = 64, c = condition(), owned = [];
+    const keep = (tensor) => { owned.push(tensor); return tensor; };
+    try {
+      const realX = keep(tf.tensor2d(packDiscriminator(sampleMarket(batch))));
+      const realY = keep(tf.ones([batch, 1]));
+      const gIn = keep(tf.tensor2d(genConditions(batch)));
+      const fakePair = keep(generator.predict(gIn));
+      const ruleCol = keep(tf.fill([batch, 1], c.rule));
+      const nCol = keep(tf.fill([batch, 1], (c.n - 2) / 18));
+      const fakeX = keep(tf.concat([fakePair, ruleCol, nCol], 1));
+      const fakeY = keep(tf.zeros([batch, 1]));
+      const dInput = keep(tf.concat([realX, fakeX], 0));
+      const dTargets = keep(tf.concat([realY, fakeY], 0));
+      const dl = scalar(await discriminator.trainOnBatch(dInput, dTargets));
+      const noiseInput = keep(tf.slice(gIn, [0, 0], [-1, 8]));
+      const conditionInput = keep(tf.slice(gIn, [0, 8], [-1, 2]));
+      const gTargets = keep(tf.ones([batch, 1]));
+      const gl = scalar(await combined.trainOnBatch([noiseInput, conditionInput], gTargets));
+      if (!Number.isFinite(dl) || !Number.isFinite(gl)) throw new Error(`损失值异常（D=${dl}, G=${gl}）。可重置模型后再训练。`);
+      epoch += 1; lossesD.push(dl); lossesG.push(gl);
+      if (lossesD.length > 2000) { lossesD.shift(); lossesG.shift(); }
+      return true;
+    } finally {
+      owned.forEach((tensor) => { if (tensor && !tensor.isDisposedInternal) tensor.dispose(); });
+      trainingNow = false;
+    }
   }
   function fitCanvas(canvas) {
     const rect = canvas.getBoundingClientRect();
@@ -124,8 +130,31 @@
   function drawScatter() {
     const plot = fitCanvas($('scatterChart')); if (!plot) return;
     const { ctx, w, h } = plot, { p, cw, ch } = axes(ctx, w, h, '估值', '报价');
+    if (decisionSurface) {
+      const cellW = cw / decisionSurface.size, cellH = ch / decisionSurface.size;
+      decisionSurface.values.forEach((score, i) => {
+        const strength = Math.abs(score - .5) * .64;
+        const color = score >= .5 ? [22, 151, 109] : [167, 103, 181];
+        ctx.fillStyle = `rgba(${color[0]},${color[1]},${color[2]},${strength})`;
+        ctx.fillRect(p.l + (i % decisionSurface.size) * cellW, p.t + Math.floor(i / decisionSurface.size) * cellH, cellW + .5, cellH + .5);
+      });
+      ctx.strokeStyle = palette.grid; ctx.lineWidth = 1;
+      for (let i = 0; i <= 4; i++) { const x = p.l + cw * i / 4, y = p.t + ch * i / 4; ctx.beginPath(); ctx.moveTo(x, p.t); ctx.lineTo(x, p.t + ch); ctx.moveTo(p.l, y); ctx.lineTo(p.l + cw, y); ctx.stroke(); }
+    }
     const dots = (arr, color) => { ctx.fillStyle = color; arr.forEach((s) => { const x = p.l + clamp(s.value, 0, 1) * cw, y = p.t + ch - clamp(s.bid, 0, 1) * ch; ctx.globalAlpha = .57; ctx.beginPath(); ctx.arc(x, y, 2.1, 0, Math.PI * 2); ctx.fill(); }); ctx.globalAlpha = 1; };
     dots(real, palette.coral); dots(generated, palette.mint);
+  }
+  function refreshDecisionSurface() {
+    if (!discriminator) return;
+    const tf = window.tf, size = 28, c = condition();
+    const inputs = [];
+    for (let row = 0; row < size; row++) for (let col = 0; col < size; col++) {
+      const value = (col + .5) / size, bid = 1 - (row + .5) / size;
+      inputs.push([value, bid / Math.max(value, .04), c.rule, (c.n - 2) / 18]);
+    }
+    const batch = tf.tensor2d(inputs); let output;
+    try { output = discriminator.predict(batch); decisionSurface = { size, values: Array.from(output.dataSync()) }; }
+    finally { batch.dispose(); if (output) output.dispose(); }
   }
   function histogram(arr, bins = 12) { const counts = new Array(bins).fill(0); arr.forEach((s) => { const i = clamp(Math.floor(s.ratio / 1.2 * bins), 0, bins - 1); counts[i]++; }); return counts.map((x) => x / Math.max(1, arr.length)); }
   function drawDensity() {
@@ -174,34 +203,46 @@
   }
   function reset() {
     running = false; els.train.disabled = false; els.train.innerHTML = '<span class="play-icon">▶</span>'; els.train.title = '开始训练';
-    epoch = 0; lossesD = []; lossesG = []; els.epoch.textContent = '0000'; els.dLoss.textContent = '—'; els.gLoss.textContent = '—'; els.state.textContent = '等待开始'; els.progress.style.width = '0%';
+    epoch = 0; lossesD = []; lossesG = []; decisionSurface = null; $('trainingError').hidden = true; els.epoch.textContent = '0000'; els.dLoss.textContent = '—'; els.gLoss.textContent = '—'; els.state.textContent = '等待开始'; els.progress.style.width = '0%';
     real = sampleMarket(256); generated = getGenerated(256); $('sampleCount').textContent = '256';
+    if (discriminator) refreshDecisionSurface();
     render();
   }
   async function startLoop() {
     if (running) return;
     if (!generator) { showToast('模型尚未准备好，请稍候片刻'); return; }
-    running = true; els.train.disabled = true; els.state.textContent = '正在对抗训练';
+    running = true; const thisLoop = ++loopId; $('trainingError').hidden = true; els.train.disabled = true; els.state.textContent = '正在对抗训练';
     const loop = async () => {
-      if (!running) return;
+      if (!running || thisLoop !== loopId) return;
       try {
-        const ok = await trainOne(); if (!ok) { setTimeout(loop, 80); return; }
+        const ok = await trainOne(); if (!running || thisLoop !== loopId) return;
+        if (!ok) { setTimeout(loop, 80); return; }
         els.epoch.textContent = String(epoch).padStart(4, '0'); els.dLoss.textContent = lossesD.at(-1).toFixed(3); els.gLoss.textContent = lossesG.at(-1).toFixed(3); els.progress.style.width = `${Math.min(100, epoch / 2)}%`;
-        if (epoch % 4 === 0) { generated = getGenerated(256); render(); }
+        if (epoch % 4 === 0) { generated = getGenerated(256); }
+        if (epoch % 8 === 0 || !decisionSurface) refreshDecisionSurface();
+        if (epoch % 4 === 0) render();
         setTimeout(loop, 35);
-      } catch (err) { running = false; els.train.disabled = false; els.train.title = '开始训练'; els.state.textContent = '训练遇到问题'; console.error(err); showToast('训练暂时中断，请重新生成市场后再试'); }
+      } catch (err) { reportTrainingError(err); }
     };
     els.train.title = '训练进行中'; loop();
   }
   async function singleStep() {
-    if (!generator || trainingNow) { showToast('模型正在准备，请稍候'); return; }
+    if (!generator || trainingNow || running) { showToast(running ? '请先暂停连续训练，再执行单步迭代' : '模型正在准备，请稍候'); return; }
+    $('trainingError').hidden = true;
     els.state.textContent = '单步训练中';
     try {
       await trainOne(); els.epoch.textContent = String(epoch).padStart(4, '0'); els.dLoss.textContent = lossesD.at(-1).toFixed(3); els.gLoss.textContent = lossesG.at(-1).toFixed(3); els.progress.style.width = `${Math.min(100, epoch / 2)}%`;
       generated = getGenerated(256); render(); els.state.textContent = '单步完成';
-    } catch (err) { console.error(err); els.state.textContent = '训练遇到问题'; showToast('单步训练失败，请重置模拟市场'); }
+    } catch (err) { reportTrainingError(err); }
   }
-  function scheduleReset() { clearTimeout(refreshTimer); running = false; updateSliders(); const apply = () => { if (trainingNow) { refreshTimer = setTimeout(apply, 70); return; } initModel(); reset(); showToast('市场参数已更新，模型已重置'); }; refreshTimer = setTimeout(apply, 180); }
+  function reportTrainingError(err) {
+    running = false; loopId += 1; trainingNow = false; els.train.disabled = false; els.train.title = '继续训练';
+    els.state.textContent = '训练已暂停 · 出现错误';
+    const detail = err && err.message ? `${err.name || 'Error'}: ${err.message}` : String(err);
+    $('trainingError').textContent = `训练中断：${detail}`; $('trainingError').hidden = false;
+    console.error('BidLab training interrupted:', err); showToast(`训练已暂停：${detail.slice(0, 130)}`);
+  }
+  function scheduleReset() { clearTimeout(refreshTimer); running = false; loopId += 1; updateSliders(); const apply = () => { if (trainingNow) { refreshTimer = setTimeout(apply, 70); return; } initModel(); reset(); showToast('市场参数已更新，模型已重置'); }; refreshTimer = setTimeout(apply, 180); }
 
   document.querySelectorAll('.segment').forEach((button) => button.addEventListener('click', () => {
     document.querySelectorAll('.segment').forEach((b) => { b.classList.remove('selected'); b.setAttribute('aria-pressed', 'false'); });
@@ -209,16 +250,15 @@
   }));
   [els.bidders, els.noise, els.market].forEach((input) => input.addEventListener('input', scheduleReset));
   $('resetData').addEventListener('click', () => { scheduleReset(); });
-  $('resetParameters').addEventListener('click', scheduleReset);
   els.train.addEventListener('click', startLoop);
   els.step.addEventListener('click', singleStep);
-  els.stop.addEventListener('click', () => { running = false; els.train.disabled = false; els.train.title = '继续训练'; els.state.textContent = '训练已暂停'; });
+  els.stop.addEventListener('click', () => { running = false; loopId += 1; els.train.disabled = false; els.train.title = '继续训练'; els.state.textContent = '训练已暂停'; });
   window.addEventListener('resize', () => requestAnimationFrame(render));
 
   async function boot() {
     updateSliders(); setRuleNote(); real = sampleMarket(256);
     if (!window.tf) { generated = sampleMarket(256); render(); els.state.textContent = '可视化预览'; showToast('模型库加载失败；图表仍可用于查看模拟数据'); return; }
-    try { await window.tf.ready(); initModel(); generated = getGenerated(256); render(); els.state.textContent = '模型就绪'; }
+    try { await window.tf.ready(); initModel(); generated = getGenerated(256); refreshDecisionSurface(); render(); els.state.textContent = '模型就绪'; }
     catch (err) { console.error(err); generated = sampleMarket(256); render(); els.state.textContent = '可视化预览'; showToast('模型初始化失败；请检查网络后刷新页面'); }
   }
   boot();
