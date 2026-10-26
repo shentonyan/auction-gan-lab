@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#111d2c" />
+  <meta name="description" content="用交互式可视化探索生成对抗网络如何学习拍卖中的估值与报价分布。" />
+  <title>BidLab — 拍卖生成实验室</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="rail">
+      <a class="brand" href="#top" aria-label="BidLab 首页"><span class="brand-mark"><i></i><i></i><i></i></span><span>BID<span class="brand-light">LAB</span></span></a>
+      <div class="rail-label">实验空间</div>
+      <a class="rail-link active" href="#lab"><span class="rail-icon">◉</span><span>GAN 实验室</span></a>
+      <a class="rail-link" href="#mechanism"><span class="rail-icon">⌘</span><span>拍卖机制</span></a>
+      <div class="rail-bottom"><span class="status-dot"></span><span>浏览器端运行</span></div>
+    </aside>
+
+    <main id="top">
+      <header class="topbar"><div class="crumb">探索 <span>/</span> 拍卖与生成模型</div><div class="topbar-right"><span class="live-pill"><b></b> 本地演示</span><a class="github-link" href="https://github.com/" target="_blank" rel="noreferrer">GitHub <span>↗</span></a></div></header>
+
+      <section class="intro" id="lab">
+        <div class="intro-copy"><div class="eyebrow"><span class="eyebrow-line"></span> INTERACTIVE AUCTION SANDBOX</div><h1>让模型学会<br /><em>理解竞价。</em></h1><p>调整拍卖规则，观察生成对抗网络如何学习估值与报价的联合分布。每一次训练，都能在图表中看见。</p><div class="intro-meta"><span><b class="meta-number">01</b> 设定机制</span><span class="meta-arrow">→</span><span><b class="meta-number">02</b> 训练 GAN</span><span class="meta-arrow">→</span><span><b class="meta-number">03</b> 对比结果</span></div></div>
+        <div class="hero-art" aria-label="估值与报价的抽象分布图"><div class="hero-grid"></div><svg viewBox="0 0 420 240" role="img" aria-label="两组竞价数据点"><path d="M38 199H390M38 199V34" class="axis"/><path d="M50 183 C100 177 114 152 162 152 S230 124 264 116 S329 73 377 54" class="curve curve-a"/><path d="M50 192 C94 187 122 166 165 166 S229 137 271 127 S331 91 377 73" class="curve curve-b"/><g class="dots-a"><circle cx="79" cy="176" r="4"/><circle cx="108" cy="168" r="3"/><circle cx="144" cy="157" r="4"/><circle cx="181" cy="149" r="3"/><circle cx="213" cy="135" r="4"/><circle cx="245" cy="125" r="3"/><circle cx="281" cy="110" r="4"/><circle cx="313" cy="91" r="3"/><circle cx="348" cy="79" r="4"/></g><g class="dots-b"><circle cx="83" cy="190" r="3"/><circle cx="119" cy="178" r="4"/><circle cx="152" cy="172" r="3"/><circle cx="193" cy="153" r="4"/><circle cx="226" cy="144" r="3"/><circle cx="257" cy="130" r="4"/><circle cx="294" cy="119" r="3"/><circle cx="332" cy="96" r="4"/><circle cx="363" cy="83" r="3"/></g><text x="35" y="222">估值</text><text x="8" y="40">报价</text></svg><div class="hero-legend"><span><i class="legend-swatch coral"></i>真实样本</span><span><i class="legend-swatch mint"></i>生成样本</span></div><div class="hero-tag">BID DISTRIBUTION <span>↗</span></div></div>
+      </section>
+
+      <section class="workspace-grid">
+        <section class="panel setup-panel" id="mechanism">
+          <div class="panel-heading"><div><div class="section-kicker">实验设置 <span>01</span></div><h2>拍卖机制</h2></div><span class="step-badge">SETUP</span></div>
+          <label class="field-label" for="auctionType">清算规则</label><div class="segmented" role="group" aria-label="拍卖规则"><button class="segment selected" data-rule="first" aria-pressed="true"><strong>第一价格</strong><small>赢家支付自己的报价</small></button><button class="segment" data-rule="second" aria-pressed="false"><strong>第二价格</strong><small>赢家支付第二高报价</small></button></div>
+          <div class="field-row"><label class="field-label" for="bidders">竞买人数 <span class="value-chip" id="biddersValue">8 人</span></label><input id="bidders" type="range" min="2" max="20" value="8" /><div class="range-ends"><span>2 人</span><span>20 人</span></div></div>
+          <div class="field-row"><label class="field-label" for="market">估值市场</label><select id="market"><option value="uniform">均匀估值 · 基准市场</option><option value="bimodal">双峰估值 · 两类竞买者</option><option value="skewed">偏态估值 · 高值稀少</option></select></div>
+          <div class="field-row"><label class="field-label" for="noise">报价噪声 <span class="value-chip" id="noiseValue">中等</span></label><input id="noise" type="range" min="0" max="40" value="14" /><div class="range-ends"><span>理性报价</span><span>高噪声</span></div></div>
+          <div class="rule-note"><span class="note-icon">i</span><span id="ruleNote">第一价格拍卖下，竞买者需要在提高中标概率与压低支付价格之间权衡。</span></div>
+          <button class="reset-button" id="resetData">↻　重新生成模拟市场</button>
+        </section>
+
+        <section class="panel train-panel">
+          <div class="panel-heading"><div><div class="section-kicker">生成模型 <span>02</span></div><h2>训练控制</h2></div><span class="model-chip"><span class="model-dot"></span> cGAN · 条件生成</span></div>
+          <div class="model-flow"><div class="flow-node noise-node"><span class="node-glyph">ξ</span><span>随机噪声<small>潜在向量 z</small></span></div><span class="flow-arrow">→</span><div class="flow-node gen-node"><span class="node-glyph">G</span><span>生成器<small>生成报价样本</small></span></div><span class="flow-arrow">→</span><div class="flow-node disc-node"><span class="node-glyph">D</span><span>判别器<small>识别真实 / 生成</small></span></div></div>
+          <div class="training-state"><div><span class="state-label">训练状态</span><strong id="trainingState">等待开始</strong></div><div class="epoch-count"><span>迭代轮次</span><strong id="epochCount">0000</strong></div></div>
+          <div class="progress-track"><div id="progressBar"></div></div>
+          <div class="loss-row"><div class="loss-card"><span>判别器损失 <b class="tiny-dot coral-dot"></b></span><strong id="dLoss">—</strong></div><div class="loss-card"><span>生成器损失 <b class="tiny-dot mint-dot"></b></span><strong id="gLoss">—</strong></div><div class="loss-card"><span>模型状态</span><strong class="training-quality" id="quality">尚未训练</strong></div></div>
+          <div class="train-actions"><button class="primary-button" id="trainButton"><span class="play-icon">▶</span> 开始训练</button><button class="secondary-button" id="stepButton">单步迭代 <span>↗</span></button><button class="icon-button" id="stopButton" title="暂停训练" aria-label="暂停训练">Ⅱ</button></div>
+          <div class="iteration-note"><span>⌁</span> 每轮训练包含一次判别器更新与一次生成器更新</div>
+        </section>
+      </section>
+
+      <section class="results-section">
+        <div class="results-head"><div><div class="section-kicker">实时观察 <span>03</span></div><h2>生成结果 <span class="results-subtitle">真实模拟样本 vs. GAN 生成样本</span></h2></div><div class="sample-count"><span class="sample-dot"></span><strong id="sampleCount">256</strong><span>个竞买人样本</span></div></div>
+        <div class="charts-grid">
+          <article class="panel chart-panel scatter-panel"><div class="chart-title"><div><h3>估值 — 报价分布</h3><p>每个点代表一位竞买者，颜色区分样本来源</p></div><button class="chart-menu" aria-label="图表说明">···</button></div><div class="chart-wrap"><canvas id="scatterChart" aria-label="估值与报价散点图"></canvas></div><div class="chart-legend"><span><i class="legend-dot real-dot"></i>真实模拟样本</span><span><i class="legend-dot generated-dot"></i>GAN 生成样本</span></div></article>
+          <article class="panel chart-panel density-panel"><div class="chart-title"><div><h3>报价折扣率</h3><p>报价 ÷ 估值 · 观察竞价策略分布</p></div><span class="chart-unit">比例</span></div><div class="chart-wrap"><canvas id="densityChart" aria-label="报价折扣率分布图"></canvas></div><div class="chart-legend"><span><i class="legend-line real-line"></i>真实模拟样本</span><span><i class="legend-line generated-line"></i>GAN 生成样本</span></div></article>
+          <article class="panel chart-panel loss-panel"><div class="chart-title"><div><h3>对抗训练轨迹</h3><p>生成器与判别器损失随训练迭代变化</p></div><span class="chart-unit">损失值</span></div><div class="chart-wrap"><canvas id="lossChart" aria-label="生成器和判别器损失曲线"></canvas></div><div class="chart-legend"><span><i class="legend-line coral-line"></i>判别器</span><span><i class="legend-line mint-line"></i>生成器</span></div></article>
+        </div>
+      </section>
+
+      <section class="evaluation-row">
+        <div class="evaluation-intro"><div class="section-kicker">机制评估 <span>04</span></div><h2>清算表现</h2><p>将生成的竞买者样本组成模拟拍卖，比较市场结果。</p><div class="illustrative-tag">模拟数据 · 仅供教学演示</div></div>
+        <div class="metric-card"><span>平均成交价</span><div class="metric-pair"><div><small>真实</small><strong id="realRevenue">—</strong></div><i>↔</i><div><small>生成</small><strong id="fakeRevenue">—</strong></div></div><div class="metric-foot"><span class="metric-mark coral-mark"></span>每场拍卖的支付价格均值</div></div>
+        <div class="metric-card"><span>配置效率</span><div class="metric-pair"><div><small>真实</small><strong id="realEfficiency">—</strong></div><i>↔</i><div><small>生成</small><strong id="fakeEfficiency">—</strong></div></div><div class="metric-foot"><span class="metric-mark mint-mark"></span>最高估值者获得物品的比例</div></div>
+        <div class="metric-card insight-card"><span>本轮观察</span><p id="insightText">开始训练后，这里会显示生成样本与真实模拟市场之间的变化。</p><span class="insight-arrow">探索训练如何改变市场分布　→</span></div>
+      </section>
+
+      <section class="explain-strip"><div class="explain-icon">✳</div><div><strong>这是一间可交互的模型实验室</strong><p>示例市场由程序生成，不代表真实拍卖数据。cGAN 学习的是模拟样本中的估值与报价关系；图表用于观察生成过程，不构成策略建议。</p></div><a href="#about">了解实验逻辑 <span>↗</span></a></section>
+      <footer id="about"><span>BidLab <i>·</i> 拍卖生成实验室</span><span>在浏览器中运行 · 不上传你的数据</span><a href="https://github.com/" target="_blank" rel="noreferrer">查看项目 <span>↗</span></a></footer>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
